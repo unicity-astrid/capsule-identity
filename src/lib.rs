@@ -112,7 +112,7 @@ impl IdentityBuilder {
     #[astrid::interceptor("handle_build_request")]
     pub fn build_system_prompt(&self, req: BuildRequest) -> Result<(), SysError> {
         let workspace_root = req.workspace_root.trim_end_matches('/');
-        let project_name = workspace_root.split('/').last().unwrap_or("project");
+        let project_name = workspace_root.rsplit('/').next().unwrap_or("project");
 
         let opening = req
             .spark
@@ -140,21 +140,21 @@ impl IdentityBuilder {
             }
         } else {
             let astrid_path = format!("{workspace_root}/ASTRID.md");
-            if let Ok(content) = fs::read_to_string(&astrid_path) {
-                if !content.trim().is_empty() {
-                    prompt.push_str("\n\n# Project Instructions\n\n");
-                    prompt.push_str(&content);
-                }
+            if let Ok(content) = fs::read_to_string(&astrid_path)
+                && !content.trim().is_empty()
+            {
+                prompt.push_str("\n\n# Project Instructions\n\n");
+                prompt.push_str(&content);
             }
         }
 
         // Load .astridignore workspace bounds
         let ignore_path = format!("{workspace_root}/.astridignore");
-        if let Ok(content) = fs::read_to_string(&ignore_path) {
-            if !content.trim().is_empty() {
-                prompt.push_str("\n\n# Workspace Bounds (.astridignore)\n\n");
-                prompt.push_str(&content);
-            }
+        if let Ok(content) = fs::read_to_string(&ignore_path)
+            && !content.trim().is_empty()
+        {
+            prompt.push_str("\n\n# Workspace Bounds (.astridignore)\n\n");
+            prompt.push_str(&content);
         }
 
         let response = BuildResponse {

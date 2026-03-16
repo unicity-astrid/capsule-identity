@@ -119,9 +119,7 @@ impl IdentityBuilder {
             .as_ref()
             .and_then(|s| s.build_preamble())
             .unwrap_or_else(|| {
-                format!(
-                    "You are Astrid, working in the project \"{project_name}\"."
-                )
+                format!("You are Astrid, working in the project \"{project_name}\".")
             });
 
         let mut prompt = format!(

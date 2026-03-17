@@ -3,61 +3,70 @@
 #![deny(unreachable_pub)]
 #![warn(missing_docs)]
 
-//! Identity builder capsule for Astrid OS.
+//! Identity capsule for Astrid OS.
 //!
-//! Subscribes to `identity.v1.request.build` IPC events and generates the
-//! system prompt for the react capsule by reading workspace
-//! configuration files (AGENTS.md, .astridignore) and the spark identity.
+//! Owns the agent's identity (spark config) in its KV store. Builds
+//! the system prompt on `identity.v1.request.build` requests. Provides
+//! `/identity-export` and `/identity-import` CLI commands.
 
 use astrid_sdk::prelude::*;
-use astrid_sdk::schemars;
+use astrid_sdk::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
 
-/// Identity builder capsule. Stateless — reads workspace files on each request.
-#[derive(Default)]
-pub struct IdentityBuilder;
+/// KV key for the spark identity config.
+const SPARK_KEY: &str = "spark";
 
-/// Request payload for building the system prompt.
-#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
-pub struct BuildRequest {
-    /// Absolute path to the workspace root directory.
-    pub workspace_root: String,
-    /// Optional agent identity configuration (from spark.toml).
-    pub spark: Option<SparkConfig>,
-    /// Session ID for correlation. Echoed back in the response so the
-    /// react loop can resolve the correct turn state without a KV lookup.
-    #[serde(default)]
-    pub session_id: Option<String>,
-}
+/// Default agent name when no spark config exists.
+const DEFAULT_CALLSIGN: &str = "Astrid";
+/// Default agent class/role.
+const DEFAULT_CLASS: &str = "a secure coding assistant";
 
-/// Agent identity configuration fields from spark.toml.
-#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+/// Agent identity configuration.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct SparkConfig {
     /// Agent name/identifier.
+    #[serde(default)]
     pub callsign: String,
     /// Agent role description.
+    #[serde(default)]
     pub class: String,
     /// Personality traits.
+    #[serde(default)]
     pub aura: String,
     /// Communication style preferences.
+    #[serde(default)]
     pub signal: String,
     /// Core directives and constraints.
+    #[serde(default)]
     pub core: String,
+}
+
+impl Default for SparkConfig {
+    fn default() -> Self {
+        Self {
+            callsign: DEFAULT_CALLSIGN.into(),
+            class: DEFAULT_CLASS.into(),
+            aura: String::new(),
+            signal: String::new(),
+            core: String::new(),
+        }
+    }
 }
 
 impl SparkConfig {
     /// Build the identity preamble from spark fields.
-    /// Returns `None` if the callsign is empty.
-    fn build_preamble(&self) -> Option<String> {
-        if self.callsign.is_empty() {
-            return None;
-        }
+    fn build_preamble(&self) -> String {
+        let callsign = if self.callsign.is_empty() {
+            DEFAULT_CALLSIGN
+        } else {
+            &self.callsign
+        };
 
         let mut parts = vec![];
         if !self.class.is_empty() {
-            parts.push(format!("You are {}, a {}.", self.callsign, self.class));
+            parts.push(format!("You are {callsign}, {class}.", class = self.class));
         } else {
-            parts.push(format!("You are {}.", self.callsign));
+            parts.push(format!("You are {callsign}."));
         }
 
         if !self.aura.is_empty() {
@@ -70,18 +79,58 @@ impl SparkConfig {
             parts.push(format!("# Core Directives\n{}", self.core));
         }
 
-        Some(parts.join("\n\n"))
+        parts.join("\n\n")
+    }
+
+    /// Serialize to TOML for export.
+    fn to_toml(&self) -> String {
+        let mut lines = vec![
+            format!("callsign = \"{}\"", self.callsign),
+            format!("class = \"{}\"", self.class),
+        ];
+        if !self.aura.is_empty() {
+            lines.push(format!("aura = \"{}\"", self.aura));
+        }
+        if !self.signal.is_empty() {
+            lines.push(format!("signal = \"{}\"", self.signal));
+        }
+        if !self.core.is_empty() {
+            lines.push(format!("core = \"{}\"", self.core));
+        }
+        lines.join("\n")
     }
 }
 
-/// Response payload containing the assembled system prompt.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct BuildResponse {
-    /// The fully assembled system prompt string.
-    pub prompt: String,
-    /// Session ID echoed from the request for correlation.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+/// Load spark config from KV. If missing, store and return defaults.
+fn load_or_init_spark() -> SparkConfig {
+    match kv::get_json::<SparkConfig>(SPARK_KEY) {
+        Ok(spark) => spark,
+        Err(_) => {
+            let spark = SparkConfig::default();
+            let _ = kv::set_json(SPARK_KEY, &spark);
+            spark
+        }
+    }
+}
+
+/// Request payload for building the system prompt.
+#[derive(Debug, Deserialize)]
+pub struct BuildRequest {
+    /// Absolute path to the workspace root directory.
+    pub workspace_root: String,
+    /// Session ID for correlation.
+    #[serde(default)]
     pub session_id: Option<String>,
+}
+
+/// Response payload containing the assembled system prompt.
+#[derive(Debug, Serialize)]
+struct BuildResponse {
+    /// The fully assembled system prompt string.
+    prompt: String,
+    /// Session ID echoed from the request for correlation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_id: Option<String>,
 }
 
 const TOOL_GUIDELINES: &str = "\
@@ -105,22 +154,19 @@ const TOOL_GUIDELINES: &str = "\
 - Read before writing. Understand before changing.
 - Make minimal, focused changes.";
 
+/// Identity builder capsule. Reads spark config from its own KV store.
+#[derive(Default)]
+pub struct IdentityBuilder;
+
 #[capsule]
 impl IdentityBuilder {
-    /// Handles `identity.v1.request.build` events. Reads workspace configuration
-    /// and publishes the assembled system prompt to `identity.v1.response.ready`.
+    /// Builds the system prompt from the spark identity in KV.
     #[astrid::interceptor("handle_build_request")]
     pub fn build_system_prompt(&self, req: BuildRequest) -> Result<(), SysError> {
         let workspace_root = req.workspace_root.trim_end_matches('/');
-        let project_name = workspace_root.rsplit('/').next().unwrap_or("project");
+        let spark = load_or_init_spark();
 
-        let opening = req
-            .spark
-            .as_ref()
-            .and_then(|s| s.build_preamble())
-            .unwrap_or_else(|| {
-                format!("You are Astrid, working in the project \"{project_name}\".")
-            });
+        let opening = spark.build_preamble();
 
         let mut prompt = format!(
             "{opening}\n\n\
@@ -131,17 +177,6 @@ impl IdentityBuilder {
 
         prompt.push_str(TOOL_GUIDELINES);
 
-        // Load project instructions (AGENTS.md, ASTRID.md, .astridignore).
-        //
-        // NOTE: The kernel VFS traps (aborts WASM) on security denials instead
-        // of returning errors. Until that's fixed, we must catch panics via
-        // a helper that uses std::panic::catch_unwind internally... except WASM
-        // doesn't support catch_unwind. So we skip file reads entirely for now
-        // and rely on the spark config + hardcoded defaults.
-        //
-        // TODO: Fix kernel VFS to return Err on security denial, then re-enable:
-        //   if let Ok(content) = fs::read_to_string("AGENTS.md") { ... }
-
         let response = BuildResponse {
             prompt,
             session_id: req.session_id,
@@ -150,4 +185,82 @@ impl IdentityBuilder {
 
         Ok(())
     }
+
+    /// Handles `/identity-export` — writes spark config to `.astrid/spark.toml`.
+    #[astrid::interceptor("handle_command")]
+    pub fn handle_command(&self, payload: serde_json::Value) -> Result<(), SysError> {
+        let text = payload.get("text").and_then(|v| v.as_str()).unwrap_or("");
+        let session_id = payload
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("default");
+
+        match text.trim() {
+            "identity-export" => {
+                let spark = load_or_init_spark();
+                let toml = spark.to_toml();
+                fs::write(".astrid/spark.toml", &toml)?;
+
+                ipc::publish_json(
+                    "agent.v1.response",
+                    &serde_json::json!({
+                        "type": "agent_response",
+                        "text": format!("Identity exported to .astrid/spark.toml ({} bytes)", toml.len()),
+                        "is_final": true,
+                        "session_id": session_id,
+                    }),
+                )?;
+            }
+            "identity-import" => {
+                let content = fs::read_to_string(".astrid/spark.toml")?;
+                // Simple TOML key = "value" parser
+                let spark = parse_spark_toml(&content);
+                kv::set_json(SPARK_KEY, &spark)?;
+
+                ipc::publish_json(
+                    "agent.v1.response",
+                    &serde_json::json!({
+                        "type": "agent_response",
+                        "text": format!("Identity imported from .astrid/spark.toml (callsign: {})", spark.callsign),
+                        "is_final": true,
+                        "session_id": session_id,
+                    }),
+                )?;
+            }
+            _ => {}
+        }
+
+        Ok(())
+    }
+
+    /// Set the agent identity. Updates the spark config in KV.
+    #[astrid::tool]
+    pub fn set_identity(&self, input: SparkConfig) -> Result<serde_json::Value, SysError> {
+        kv::set_json(SPARK_KEY, &input)?;
+        Ok(serde_json::json!({
+            "status": "ok",
+            "callsign": input.callsign,
+        }))
+    }
+}
+
+/// Simple TOML parser for spark.toml (key = "value" pairs only).
+fn parse_spark_toml(content: &str) -> SparkConfig {
+    let mut spark = SparkConfig::default();
+    for line in content.lines() {
+        let line = line.trim();
+        if let Some((key, val)) = line.split_once('=') {
+            let key = key.trim();
+            let val = val.trim().trim_matches('"');
+            match key {
+                "callsign" => spark.callsign = val.to_string(),
+                "class" => spark.class = val.to_string(),
+                "aura" => spark.aura = val.to_string(),
+                "signal" => spark.signal = val.to_string(),
+                "core" => spark.core = val.to_string(),
+                _ => {}
+            }
+        }
+    }
+    spark
 }

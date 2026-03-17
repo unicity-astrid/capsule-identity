@@ -5,21 +5,36 @@
 
 //! Identity capsule for Astrid OS.
 //!
-//! Owns the agent's identity (spark config) in its KV store. Builds
-//! the system prompt on `identity.v1.request.build` requests. Provides
-//! `/identity-export` and `/identity-import` CLI commands.
+//! Owns the agent's identity (spark config) as persistent state. Builds
+//! the system prompt on `identity.v1.request.build` requests. On first
+//! boot, injects an onboarding instruction so the agent walks the user
+//! through identity setup. Provides `/identity-export` and
+//! `/identity-import` CLI commands.
 
 use astrid_sdk::prelude::*;
 use astrid_sdk::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
 
-/// KV key for the spark identity config.
-const SPARK_KEY: &str = "spark";
-
 /// Default agent name when no spark config exists.
 const DEFAULT_CALLSIGN: &str = "Astrid";
 /// Default agent class/role.
 const DEFAULT_CLASS: &str = "a secure coding assistant";
+
+/// Onboarding instruction appended to the system prompt when the user
+/// hasn't configured their agent identity yet.
+const ONBOARDING_PROMPT: &str = "\
+# Important: Identity Setup Required
+
+This is your first session. Before doing anything else, introduce yourself
+briefly and ask the user if they'd like to personalize you. Ask for:
+1. A name (callsign) they'd like to call you
+2. What role/specialty they want you to focus on (class)
+3. Any personality traits they'd like (aura) — optional
+4. Communication style preferences (signal) — optional
+5. Core directives or constraints (core) — optional
+
+Once they provide answers, call the `set_identity` tool to save the configuration.
+If they decline, that's fine — continue with the defaults.";
 
 /// Agent identity configuration.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -101,18 +116,6 @@ impl SparkConfig {
     }
 }
 
-/// Load spark config from KV. If missing, store and return defaults.
-fn load_or_init_spark() -> SparkConfig {
-    match kv::get_json::<SparkConfig>(SPARK_KEY) {
-        Ok(spark) => spark,
-        Err(_) => {
-            let spark = SparkConfig::default();
-            let _ = kv::set_json(SPARK_KEY, &spark);
-            spark
-        }
-    }
-}
-
 /// Request payload for building the system prompt.
 #[derive(Debug, Deserialize)]
 pub struct BuildRequest {
@@ -133,26 +136,36 @@ struct BuildResponse {
     session_id: Option<String>,
 }
 
-/// Identity builder capsule. Reads spark config from its own KV store.
-#[derive(Default)]
-pub struct IdentityBuilder;
+/// Identity capsule state — persisted to KV via `#[capsule(state)]`.
+#[derive(Default, Debug, Serialize, Deserialize)]
+pub struct IdentityBuilder {
+    /// The spark identity configuration.
+    spark: SparkConfig,
+    /// Whether the user has completed identity onboarding.
+    onboarded: bool,
+}
 
 #[capsule]
 impl IdentityBuilder {
-    /// Builds the system prompt from the spark identity in KV.
+    /// Builds the system prompt from the spark identity.
     #[astrid::interceptor("handle_build_request")]
-    pub fn build_system_prompt(&self, req: BuildRequest) -> Result<(), SysError> {
+    pub fn build_system_prompt(&mut self, req: BuildRequest) -> Result<(), SysError> {
         let workspace_root = req.workspace_root.trim_end_matches('/');
-        let spark = load_or_init_spark();
 
-        let opening = spark.build_preamble();
+        let opening = self.spark.build_preamble();
 
-        let prompt = format!(
+        // TODO: Move to a new capsule which handles env details. Time would be good too.
+        let mut prompt = format!(
             "{opening}\n\n\
              # Environment\n\
              - Current working directory: {workspace_root}\n\
              - Platform: astrid-os"
         );
+
+        if !self.onboarded {
+            prompt.push_str("\n\n");
+            prompt.push_str(ONBOARDING_PROMPT);
+        }
 
         let response = BuildResponse {
             prompt,
@@ -163,9 +176,9 @@ impl IdentityBuilder {
         Ok(())
     }
 
-    /// Handles `/identity-export` — writes spark config to `.astrid/spark.toml`.
+    /// Handles `/identity-export` and `/identity-import` CLI commands.
     #[astrid::interceptor("handle_command")]
-    pub fn handle_command(&self, payload: serde_json::Value) -> Result<(), SysError> {
+    pub fn handle_command(&mut self, payload: serde_json::Value) -> Result<(), SysError> {
         let text = payload.get("text").and_then(|v| v.as_str()).unwrap_or("");
         let session_id = payload
             .get("session_id")
@@ -174,8 +187,7 @@ impl IdentityBuilder {
 
         match text.trim() {
             "identity-export" => {
-                let spark = load_or_init_spark();
-                let toml = spark.to_toml();
+                let toml = self.spark.to_toml();
                 fs::write(".astrid/spark.toml", &toml)?;
 
                 ipc::publish_json(
@@ -190,15 +202,14 @@ impl IdentityBuilder {
             }
             "identity-import" => {
                 let content = fs::read_to_string(".astrid/spark.toml")?;
-                // Simple TOML key = "value" parser
-                let spark = parse_spark_toml(&content);
-                kv::set_json(SPARK_KEY, &spark)?;
+                self.spark = parse_spark_toml(&content);
+                self.onboarded = true;
 
                 ipc::publish_json(
                     "agent.v1.response",
                     &serde_json::json!({
                         "type": "agent_response",
-                        "text": format!("Identity imported from .astrid/spark.toml (callsign: {})", spark.callsign),
+                        "text": format!("Identity imported from .astrid/spark.toml (callsign: {})", self.spark.callsign),
                         "is_final": true,
                         "session_id": session_id,
                     }),
@@ -210,13 +221,15 @@ impl IdentityBuilder {
         Ok(())
     }
 
-    /// Set the agent identity. Updates the spark config in KV.
+    /// Set the agent identity. Updates the spark config and marks
+    /// onboarding as complete.
     #[astrid::tool]
-    pub fn set_identity(&self, input: SparkConfig) -> Result<serde_json::Value, SysError> {
-        kv::set_json(SPARK_KEY, &input)?;
+    pub fn set_identity(&mut self, input: SparkConfig) -> Result<serde_json::Value, SysError> {
+        self.spark = input;
+        self.onboarded = true;
         Ok(serde_json::json!({
             "status": "ok",
-            "callsign": input.callsign,
+            "callsign": self.spark.callsign,
         }))
     }
 }

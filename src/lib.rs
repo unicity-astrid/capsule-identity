@@ -133,27 +133,6 @@ struct BuildResponse {
     session_id: Option<String>,
 }
 
-const TOOL_GUIDELINES: &str = "\
-# Tool Usage Guidelines
-
-## File Operations
-- Always read a file before editing it.
-- Prefer `edit_file` over `write_file` for existing files.
-- Use `read_file` with offset/limit for large files.
-
-## Search
-- Use `glob` to find files by name pattern before using `grep` to search contents.
-- Use `grep` with a file glob filter to narrow searches to relevant file types.
-
-## Execution
-- Use `bash` for git, build tools, package managers, and other terminal operations.
-- Do NOT use `bash` for file operations — use the dedicated file tools.
-- The bash working directory persists between calls.
-
-## General
-- Read before writing. Understand before changing.
-- Make minimal, focused changes.";
-
 /// Identity builder capsule. Reads spark config from its own KV store.
 #[derive(Default)]
 pub struct IdentityBuilder;
@@ -168,14 +147,12 @@ impl IdentityBuilder {
 
         let opening = spark.build_preamble();
 
-        let mut prompt = format!(
+        let prompt = format!(
             "{opening}\n\n\
              # Environment\n\
              - Current working directory: {workspace_root}\n\
-             - Platform: astrid-os\n\n"
+             - Platform: astrid-os"
         );
-
-        prompt.push_str(TOOL_GUIDELINES);
 
         let response = BuildResponse {
             prompt,

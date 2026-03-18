@@ -25,16 +25,13 @@ const DEFAULT_CLASS: &str = "a secure coding assistant";
 const ONBOARDING_PROMPT: &str = "\
 # Important: Identity Setup Required
 
-This is your first session. Before doing anything else, introduce yourself
-briefly and ask the user if they'd like to personalize you. Ask for:
-1. A name (callsign) they'd like to call you
-2. What role/specialty they want you to focus on (class)
-3. Any personality traits they'd like (aura) — optional
-4. Communication style preferences (signal) — optional
-5. Core directives or constraints (core) — optional
-
-Once they provide answers, call the `set_identity` tool to save the configuration.
-If they decline, that's fine — continue with the defaults.";
+This is your first session. You have no name or identity yet. Introduce
+yourself briefly, then ask the user one open question about how they'd like
+to work together. Let the conversation flow naturally. From it, derive a name,
+personality, and focus that feel right — then surface what you came up with
+and let the user react. Adjust from there. Once you've landed on something,
+call `set_identity` to save it. Always call it — if the user wants to skip,
+derive something fitting from the exchange and confirm it casually before saving.";
 
 /// Agent identity configuration.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -99,20 +96,7 @@ impl SparkConfig {
 
     /// Serialize to TOML for export.
     fn to_toml(&self) -> String {
-        let mut lines = vec![
-            format!("callsign = \"{}\"", self.callsign),
-            format!("class = \"{}\"", self.class),
-        ];
-        if !self.aura.is_empty() {
-            lines.push(format!("aura = \"{}\"", self.aura));
-        }
-        if !self.signal.is_empty() {
-            lines.push(format!("signal = \"{}\"", self.signal));
-        }
-        if !self.core.is_empty() {
-            lines.push(format!("core = \"{}\"", self.core));
-        }
-        lines.join("\n")
+        toml::to_string(self).unwrap_or_default()
     }
 }
 
@@ -152,17 +136,19 @@ impl IdentityBuilder {
     pub fn build_system_prompt(&mut self, req: BuildRequest) -> Result<(), SysError> {
         let workspace_root = req.workspace_root.trim_end_matches('/');
 
-        let opening = self.spark.build_preamble();
-
         // TODO: Move to a new capsule which handles env details. Time would be good too.
         let mut prompt = format!(
-            "{opening}\n\n\
-             # Environment\n\
+            "# Environment\n\
              - Current working directory: {workspace_root}\n\
              - Platform: astrid-os"
         );
 
-        if !self.onboarded {
+        if self.onboarded {
+            // Prepend the established identity preamble.
+            let opening = self.spark.build_preamble();
+            prompt = format!("{opening}\n\n{prompt}");
+        } else {
+            // No preamble — don't anchor the model to a name before onboarding.
             prompt.push_str("\n\n");
             prompt.push_str(ONBOARDING_PROMPT);
         }
@@ -234,23 +220,10 @@ impl IdentityBuilder {
     }
 }
 
-/// Simple TOML parser for spark.toml (key = "value" pairs only).
+/// Parse spark.toml into a `SparkConfig`.
 fn parse_spark_toml(content: &str) -> SparkConfig {
-    let mut spark = SparkConfig::default();
-    for line in content.lines() {
-        let line = line.trim();
-        if let Some((key, val)) = line.split_once('=') {
-            let key = key.trim();
-            let val = val.trim().trim_matches('"');
-            match key {
-                "callsign" => spark.callsign = val.to_string(),
-                "class" => spark.class = val.to_string(),
-                "aura" => spark.aura = val.to_string(),
-                "signal" => spark.signal = val.to_string(),
-                "core" => spark.core = val.to_string(),
-                _ => {}
-            }
-        }
-    }
-    spark
+    toml::from_str(content).unwrap_or_else(|e| {
+        let _ = log::warn(format!("Failed to parse spark.toml, using defaults: {e}"));
+        SparkConfig::default()
+    })
 }

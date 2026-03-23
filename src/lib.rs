@@ -171,8 +171,7 @@ impl IdentityBuilder {
             .and_then(|v| v.as_str())
             .unwrap_or("default");
 
-        let cwd_dir = env::var("cwd_dir").unwrap_or_else(|_| ".astrid".to_string());
-        let spark_path = format!("cwd://{cwd_dir}/spark.toml");
+        let spark_path = "home://spark.toml";
 
         match text.trim() {
             "identity-export" => {

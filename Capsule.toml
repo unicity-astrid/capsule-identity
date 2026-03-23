@@ -9,15 +9,10 @@ astrid-version = ">=0.1.0"
 id = "identity-builder"
 file = "astrid_capsule_identity.wasm"
 type = "executable"
-capabilities = { fs_read = ["cwd://"], fs_write = ["cwd://"] }
+capabilities = { fs_read = ["home://"], fs_write = ["home://"] }
 
 [exports.astrid]
 spark = "1.0.0"
-
-[env]
-# Name of the project folder used for identity export/import (set by the distro).
-# Override to rebrand without forking: set cwd_dir = ".myagent" in your Distro.toml.
-cwd_dir = { prompt = "Project folder name (e.g. .astrid)", secret = false }
 
 [capabilities]
 ipc_publish = ["spark.v1.response.ready", "agent.v1.response"]
@@ -32,8 +27,8 @@ action = "handle_command"
 
 [[command]]
 name = "identity-export"
-description = "Export agent identity (spark config) to {cwd_dir}/spark.toml"
+description = "Export agent identity (spark config) to home://spark.toml"
 
 [[command]]
 name = "identity-import"
-description = "Import agent identity from {cwd_dir}/spark.toml into KV store"
+description = "Import agent identity from home://spark.toml into KV store"

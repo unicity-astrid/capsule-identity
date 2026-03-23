@@ -27,8 +27,8 @@ action = "handle_command"
 
 [[command]]
 name = "identity-export"
-description = "Export agent identity (spark config) to home://spark.toml"
+description = "Export agent identity (spark config) to home://.config/spark.toml"
 
 [[command]]
 name = "identity-import"
-description = "Import agent identity from home://spark.toml into KV store"
+description = "Import agent identity from home://.config/spark.toml into KV store"

@@ -176,7 +176,7 @@ impl IdentityBuilder {
         match text.trim() {
             "identity-export" => {
                 let toml = self.spark.to_toml();
-                fs::write(&spark_path, &toml)?;
+                fs::write(spark_path, &toml)?;
 
                 ipc::publish_json(
                     "agent.v1.response",
@@ -189,7 +189,7 @@ impl IdentityBuilder {
                 )?;
             }
             "identity-import" => {
-                let content = fs::read_to_string(&spark_path)?;
+                let content = fs::read_to_string(spark_path)?;
                 self.spark = parse_spark_toml(&content);
                 self.onboarded = true;
 

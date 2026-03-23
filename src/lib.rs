@@ -171,23 +171,26 @@ impl IdentityBuilder {
             .and_then(|v| v.as_str())
             .unwrap_or("default");
 
+        let cwd_dir = env::var("cwd_dir").unwrap_or_else(|_| ".astrid".to_string());
+        let spark_path = format!("cwd://{cwd_dir}/spark.toml");
+
         match text.trim() {
             "identity-export" => {
                 let toml = self.spark.to_toml();
-                fs::write(".astrid/spark.toml", &toml)?;
+                fs::write(&spark_path, &toml)?;
 
                 ipc::publish_json(
                     "agent.v1.response",
                     &serde_json::json!({
                         "type": "agent_response",
-                        "text": format!("Identity exported to .astrid/spark.toml ({} bytes)", toml.len()),
+                        "text": format!("Identity exported to {spark_path} ({} bytes)", toml.len()),
                         "is_final": true,
                         "session_id": session_id,
                     }),
                 )?;
             }
             "identity-import" => {
-                let content = fs::read_to_string(".astrid/spark.toml")?;
+                let content = fs::read_to_string(&spark_path)?;
                 self.spark = parse_spark_toml(&content);
                 self.onboarded = true;
 
@@ -195,7 +198,7 @@ impl IdentityBuilder {
                     "agent.v1.response",
                     &serde_json::json!({
                         "type": "agent_response",
-                        "text": format!("Identity imported from .astrid/spark.toml (callsign: {})", self.spark.callsign),
+                        "text": format!("Identity imported from {spark_path} (callsign: {})", self.spark.callsign),
                         "is_final": true,
                         "session_id": session_id,
                     }),

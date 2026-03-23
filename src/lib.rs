@@ -171,7 +171,7 @@ impl IdentityBuilder {
             .and_then(|v| v.as_str())
             .unwrap_or("default");
 
-        let spark_path = "home://spark.toml";
+        let spark_path = "home://.config/spark.toml";
 
         match text.trim() {
             "identity-export" => {

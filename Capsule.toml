@@ -16,14 +16,18 @@ capabilities = { fs_read = ["home://"], fs_write = ["home://"] }
 
 [publish]
 "spark.v1.response.ready" = { wit = "build-response" }
+# No canonical WIT type yet for free-form agent responses.
 "agent.v1.response" = { wit = "TODO" }
-"tool.v1.execute.*.result" = { wit = "TODO" }
+"tool.v1.execute.*.result" = { wit = "@unicity-astrid/wit/types/tool-call-result" }
+# No canonical WIT type yet for tool describe responses.
 "tool.v1.response.describe.*" = { wit = "TODO" }
 
 [subscribe]
-"tool.v1.execute.save_identity" = { wit = "TODO", handler = "tool_execute_save_identity" }
+"tool.v1.execute.save_identity" = { wit = "@unicity-astrid/wit/types/tool-call", handler = "tool_execute_save_identity" }
+# No canonical WIT type yet for tool describe requests.
 "tool.v1.request.describe" = { wit = "TODO", handler = "tool_describe" }
-"spark.v1.request.build" = { wit = "TODO", handler = "handle_build_request" }
+"spark.v1.request.build" = { wit = "@unicity-astrid/wit/spark/build-request", handler = "handle_build_request" }
+# No canonical WIT type yet for CLI command execute envelopes.
 "cli.v1.command.execute" = { wit = "TODO", handler = "handle_command" }
 
 [[command]]

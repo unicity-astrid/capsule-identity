@@ -15,7 +15,7 @@ capabilities = { fs_read = ["home://"], fs_write = ["home://"] }
 "astrid:spark" = "1.0.0"
 
 [publish]
-"spark.v1.response.ready" = { wit = "build-response" }
+"spark.v1.response.ready" = { wit = "@unicity-astrid/wit/spark/build-response" }
 # No canonical WIT type yet for free-form agent responses.
 "agent.v1.response" = { wit = "TODO" }
 "tool.v1.execute.*.result" = { wit = "@unicity-astrid/wit/types/tool-call-result" }

@@ -25,3 +25,4 @@ panic = "abort"
 astrid-sdk = { path = "../../sdk-rust/astrid-sdk" }
 astrid-sdk-macros = { path = "../../sdk-rust/astrid-sdk-macros" }
 astrid-sys = { path = "../../sdk-rust/astrid-sys" }
+astrid-types      = { path = "../../core/crates/astrid-types" }

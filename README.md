@@ -30,7 +30,6 @@ Stateless. Reads workspace files fresh on every request. Session ID is echoed ba
 ## Development
 
 ```bash
-rustup target add wasm32-unknown-unknown
 cargo build --target wasm32-unknown-unknown --release
 ```
 

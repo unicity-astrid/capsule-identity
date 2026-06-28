@@ -37,7 +37,7 @@ State is scoped by Astrid's capsule KV isolation for the calling principal. Sess
 
 ```bash
 cargo build
-cargo test --target aarch64-apple-darwin
+cargo test
 ```
 
 ## License
